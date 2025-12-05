@@ -151,13 +151,13 @@ def process_video(video_path, window_name, model_path, cam_id,
         if not ret:
             break
 
-        # Kiểm tra give_way - nếu True thì skip processing để tiết kiệm tài nguyên
-        if give_way_shared.value:
-            # Vẫn hiển thị frame gốc nhưng không xử lý
-            cv2.imshow(window_name, frame)
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                break
-            continue
+        # # Kiểm tra give_way - nếu True thì skip processing để tiết kiệm tài nguyên
+        # if give_way_shared.value:
+        #     # Vẫn hiển thị frame gốc nhưng không xử lý
+        #     cv2.imshow(window_name, frame)
+        #     if cv2.waitKey(1) & 0xFF == ord('q'):
+        #         break
+        #     continue
 
         # YOLO + BoT-SORT tracking 
         results = model.track(
@@ -258,9 +258,9 @@ def process_video(video_path, window_name, model_path, cam_id,
         for item in read_yaml(slot_file):
             cv2.circle(frame, (item['coordinate']), 5, (0, 255, 0), -1)
 
-        cv2.imshow(window_name, frame)
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
+        # cv2.imshow(window_name, frame)
+        # if cv2.waitKey(1) & 0xFF == ord('q'):
+        #     break
 
     cap.release()
 
