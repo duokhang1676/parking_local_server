@@ -1,0 +1,145 @@
+import serial
+import threading
+import time
+import datetime
+from app.modules.utils import play_sound, get_parked_vehicles_from_file
+from app.modules.cloud_api import insert_history
+import dotenv
+import os
+from app.modules import globals
+dotenv.load_dotenv()
+
+# Giao tiếp serial với micro controller
+def start_connect_bgm220():
+   # Thiết lập cổng Serial (kiểm tra cổng COM trong Device Manager)
+    port = os.getenv('UART_PORT')
+    baudrate = 115200
+    
+    # DEBUG: Kiểm tra port config
+    print(f"[DEBUG] Attempting to connect to UART Port: {port}, Baudrate: {baudrate}")
+    
+    if port is None or port == "":
+        print("[ERROR] UART_PORT not configured in .env file!")
+        return
+    
+    # Thiết lập cổng Serial (kiểm tra cổng COM trong Device Manager)
+    try:
+        # Kết nối Serial
+        ser = serial.Serial(port, baudrate, timeout=1)
+        print(f"[SUCCESS] Kết nối thành công với {port}")
+        threading.Thread(target=play_sound, args=('connected_bgm220.mp3',)).start()
+        # API arduino
+        # 0: barie_in:0 (đóng barie vào)
+        # 1: barie_in:1 (mở barie vào)
+        # 2: barie_out:0 (đóng barie ra)
+        # 3: barie_out:1 (mở barie ra)
+        # 4: update_slot (cập nhật lại số chỗ trống và hướng đi)
+        while True:
+            time.sleep(0.1)  # Giảm từ 1s xuống 0.1s để đọc nhanh hơn
+            
+            # DEBUG: Kiểm tra buffer
+            if ser.in_waiting > 0:
+                print(f"[DEBUG] Bytes available in buffer: {ser.in_waiting}")
+            
+            # Danh sách dữ liệu từ Arduino
+            if globals.open_in:
+                threading.Thread(target=play_sound, args=('xin-moi-vao.mp3',)).start()
+                ser.write(b'open_in\n')  # Gửi lệnh mở barie vào
+                print("[SEND] Mở barie vào")
+                globals.open_in = False
+            if globals.open_out:
+                threading.Thread(target=play_sound, args=('tam-biet-quy-khach.mp3',)).start()
+                ser.write(b'open_out\n')  # Gửi lệnh mở barie ra
+                print("[SEND] Mở barie ra")
+                # Tao history khi xe ra
+                parked_vehicles = get_parked_vehicles_from_file()
+                for vehicle in parked_vehicles['list']:
+                    if vehicle['license_plate'] == globals.license_plate:
+                        exit_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        history = {
+                            'parking_id': os.getenv('PARKING_ID'),
+                            'user_id': "0123",
+                            'license_plate': vehicle['license_plate'],
+                            'time_in': vehicle["time_in"],
+                            'time_out': exit_time,
+                            'parking_time': "0.1",
+                            'total_price': 0,
+                            }
+                        if insert_history(history):
+                            print("Tạo lịch sử xe ra thành công:", history)
+                        else:
+                            print("Tạo lịch sử xe ra thất bại:", history)
+                        break
+                globals.open_out = False
+            
+            # Đọc dữ liệu từ UART
+            if ser.in_waiting > 0:
+                try:
+                    # Đọc dữ liệu từ Arduino
+                    data = ser.readline().decode('utf-8').strip()
+                    
+                    # DEBUG: In raw data
+                    print(f"[RECEIVE] Raw data: '{data}'")
+                    
+                    if not data:
+                        print("[WARNING] Empty data received")
+                        continue
+                    
+                    # Kiểm tra định dạng và tách key, value
+                    if ":" in data:
+                        key, value = data.split(":", 1)
+                        print(f"[PARSE] Key: '{key}', Value: '{value}'")
+                        
+                        # Xe vào
+                        if key == "car_in":
+                            if value == "1":
+                                print("[ACTION] Xe vào - Bật detect license")
+                                globals.set_give_way(True)
+                                globals.start_detect_license = True
+                                globals.car_in = True
+                            else:
+                                print("[ACTION] Xe vào kết thúc - Tắt detect license")
+                                globals.set_give_way(False)
+                                globals.start_detect_license = False
+                                globals.license_plate = ""
+                        # Xe ra
+                        elif key == "car_out":
+                            if value == "1":
+                                print("[ACTION] Xe ra - Bật detect license")
+                                globals.set_give_way(True)
+                                globals.start_detect_license = True
+                                globals.car_out = True
+                            else:
+                                print("[ACTION] Xe ra kết thúc - Tắt detect license")
+                                globals.set_give_way(False)
+                                globals.start_detect_license = False
+                                globals.license_plate = ""
+                        else:
+                            print(f"[WARNING] Unknown key: '{key}'")
+                    else:
+                        print(f"[WARNING] Invalid data format (no ':' separator): '{data}'")
+                        
+                except UnicodeDecodeError as e:
+                    print(f"[ERROR] Decode error: {e}")
+                except Exception as e:
+                    print(f"[ERROR] Error reading UART: {e}")
+            else:
+                # Không có dữ liệu trong buffer
+                pass
+    
+
+    except serial.SerialException as e:
+        print(f"[ERROR] Không thể kết nối tới {port}: {e}")
+        print("[HELP] Kiểm tra:")
+        print("  1. Port có đúng không? (Device Manager > Ports)")
+        print("  2. Thiết bị có được cắm vào không?")
+        print("  3. Driver đã cài đặt chưa?")
+        print("  4. Port có đang bị sử dụng bởi chương trình khác không?")
+    except KeyboardInterrupt:
+        print("\n[INFO] Đã thoát chương trình.")
+    except Exception as e:
+        print(f"[ERROR] Unexpected error: {e}")
+    finally:
+        if 'ser' in locals() and ser.is_open:
+            ser.close()
+            print("[INFO] Đã đóng cổng Serial.")
