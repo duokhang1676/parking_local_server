@@ -47,6 +47,7 @@ humidity = None
 light = None
 light_state = False
 turn_light = False
+auto_light_mode = False
 
 # Thread lock for loadcell data access
 imu_data_init_lock = threading.Lock()

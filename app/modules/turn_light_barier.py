@@ -7,6 +7,7 @@ port = 1883
 
 # Định nghĩa các topics riêng biệt
 TOPIC_LIGHT = "parking/light"
+TOPIC_LIGHT_MODE = "parking/light/mode"
 TOPIC_BARRIER_IN = "parking/barrier/in"
 TOPIC_BARRIER_OUT = "parking/barrier/out"
 
@@ -50,6 +51,13 @@ def on_message(client, userdata, msg):
         elif message == "close":
             globals.close_out = True
             print("[ACTION] Barrier OUT closed")
+    elif topic == TOPIC_LIGHT_MODE:
+        if message == "on":
+            globals.auto_light_mode = True
+            print("[ACTION] Auto Light Mode enabled")
+        elif message == "off":
+            globals.auto_light_mode = False
+            print("[ACTION] Auto Light Mode disabled")
     else:
         print(f"[WARNING] Unknown topic: {topic}")
 def on_subscribe(client, userdata, mid, granted_qos):

@@ -55,7 +55,7 @@ def start_connect_bgm220():
                 ser.write(b'turn_off_light\n')
                 print("[SEND] Tắt đèn chiếu sáng")
                 globals.light_state = False
-            if current_light is not None:
+            if current_light is not None and globals.auto_light_mode:
                 if current_light < 100 and globals.light_state == False:
                     ser.write(b'turn_on_light\n')
                     threading.Thread(target=play_sound, args=('troi-toi.mp3',)).start()
