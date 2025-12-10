@@ -1,21 +1,4 @@
 {
     "parking_id": "parking_001",
-    "list": [
-        {
-            "user_id": "0356972399",
-            "customer_type": "customer",
-            "time_in": "2025-12-09T05:15:30.207052",
-            "license_plate": "30K-55055",
-            "slot_name": "B2",
-            "num_slot": 0
-        },
-        {
-            "user_id": "0356972399",
-            "customer_type": "customer",
-            "time_in": "2025-12-09T05:16:35.625252",
-            "license_plate": "30G-49344",
-            "slot_name": "A3",
-            "num_slot": 0
-        }
-    ]
+    "list": []
 }

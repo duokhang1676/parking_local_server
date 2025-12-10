@@ -16,7 +16,7 @@ dotenv.load_dotenv()
 # CONSTANTS
 PARKING_ID = os.getenv("PARKING_ID")
 VIDEO_SOURCES = ast.literal_eval(os.getenv("TRACKING_CAMERA"))
-TRACKER_PATH = "app/resources/tracker/bytetrack.yaml"
+TRACKER_PATH = "app/resources/tracker/"+os.getenv("TRACKER_CONFIG")+".yaml"
 DETECT_MODEL_PATH = os.getenv("DETECT_MODEL_PATH")
 REID_COORDS_PATH = "app/resources/coordinates/reid-data/"
 SLOT_COORDS_PATH = "app/resources/coordinates/slot-data/"

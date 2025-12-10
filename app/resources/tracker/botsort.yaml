@@ -18,4 +18,4 @@ gmc_method: sparseOptFlow # (str) Global motion compensation: sparseOptFlow|orb|
 proximity_thresh: 0.5 # (float) Min IoU to consider tracks proximate for ReID; higher is stricter
 appearance_thresh: 0.8 # (float) Min appearance similarity for ReID; raise to avoid identity swaps
 with_reid: True # (bool) Enable ReID model use; needs extra model and compute
-model: auto #auto # (str) ReID model name/path; "auto" uses detector features if available
+model: auto #app/resources/models/yolo11n-cls.pt #auto #auto # (str) ReID model name/path; "auto" uses detector features if available
