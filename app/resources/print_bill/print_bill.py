@@ -38,10 +38,10 @@ def write_file_pdf(date,license,time_in,time_out,parking_time,total_price):
     """
 
     # Đường dẫn file PDF muốn tạo
-    file_path = "resources/print_bill/receipt.pdf"
+    file_path = "app/resources/print_bill/receipt.pdf"
 
     # Đường dẫn đến font Arial Unicode MS TTF
-    font_path = "resources/print_bill/arial-unicode-ms.ttf"  # Thay bằng đường dẫn thực tế đến font Arial Unicode MS TTF
+    font_path = "app/resources/print_bill/arial-unicode-ms.ttf"  # Thay bằng đường dẫn thực tế đến font Arial Unicode MS TTF
 
     # Đăng ký font Arial Unicode MS
     pdfmetrics.registerFont(TTFont('ArialUnicodeMS', font_path))
@@ -97,7 +97,7 @@ def printting():
     printer.StartPage()
 
     # Đọc văn bản từ file PDF
-    pdf_file_path = "resources/print_bill/receipt.pdf"
+    pdf_file_path = "app/resources/print_bill/receipt.pdf"
     text = extract_text_from_pdf(pdf_file_path)
 
     # Vị trí bắt đầu
