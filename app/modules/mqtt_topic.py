@@ -9,6 +9,7 @@ TOPIC_LIGHT = "parking/light"
 TOPIC_LIGHT_MODE = "parking/light/mode"
 TOPIC_BARRIER_IN = "parking/barrier/in"
 TOPIC_BARRIER_OUT = "parking/barrier/out"
+TOPIC_SEARCH_VEHICLE = "parking/vehicle/search"
 
 def on_connect(client, userdata, flags, rc):
     if rc == 0:
@@ -18,7 +19,8 @@ def on_connect(client, userdata, flags, rc):
         client.subscribe(TOPIC_LIGHT_MODE, qos=1)
         client.subscribe(TOPIC_BARRIER_IN, qos=1)
         client.subscribe(TOPIC_BARRIER_OUT, qos=1)
-        print(f"[SUBSCRIBED] Topics: {TOPIC_LIGHT}, {TOPIC_LIGHT_MODE}, {TOPIC_BARRIER_IN}, {TOPIC_BARRIER_OUT}")
+        client.subscribe(TOPIC_SEARCH_VEHICLE, qos=1)
+        print(f"[SUBSCRIBED] Topics: {TOPIC_LIGHT}, {TOPIC_LIGHT_MODE}, {TOPIC_BARRIER_IN}, {TOPIC_BARRIER_OUT}, {TOPIC_SEARCH_VEHICLE} ")
     else:
         print(f"[ERROR] Connection failed with code: {rc}")
 
@@ -58,12 +60,15 @@ def on_message(client, userdata, msg):
         elif message == "off":
             globals.auto_light_mode = False
             print("[ACTION] Auto Light Mode disabled")
+    elif topic == TOPIC_SEARCH_VEHICLE:
+        globals.set_search_vehicle(message)
+        print(f"[ACTION] Search Vehicle set to: {message}")
     else:
         print(f"[WARNING] Unknown topic: {topic}")
 def on_subscribe(client, userdata, mid, granted_qos):
     print(f"[SUBSCRIBE CONFIRMED] QoS: {granted_qos}")
 
-def start_turn_light_barier():
+def start_mqtt_topic():
     client = mqtt.Client()
     client.on_connect = on_connect
     client.on_message = on_message

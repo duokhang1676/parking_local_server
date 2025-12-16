@@ -3,6 +3,10 @@ import os
 import dotenv
 dotenv.load_dotenv()
 
+# search_vehicle from MQTT
+search_vehicle = ""
+search_vehicle_shared = None  # Will be set to Manager.dict from main process
+
 # Register vehicles 
 registered_vehicles = []
 # Screen display
@@ -167,3 +171,19 @@ def set_give_way(new_give_way):
         print(f"[GIVE_WAY] Set to {new_give_way} (shared memory updated)")
     else:
         print(f"[GIVE_WAY] Set to {new_give_way} (WARNING: shared memory not initialized!)")
+
+def get_search_vehicle():
+    """Get the current search_vehicle from shared memory if available"""
+    if search_vehicle_shared is not None:
+        return search_vehicle_shared.get('value', '')
+    return search_vehicle
+
+def set_search_vehicle(new_search_vehicle):
+    """Set search_vehicle in shared memory if available"""
+    global search_vehicle
+    search_vehicle = new_search_vehicle
+    if search_vehicle_shared is not None:
+        search_vehicle_shared['value'] = new_search_vehicle
+        print(f"[SEARCH_VEHICLE] Set to '{new_search_vehicle}' (shared memory updated)")
+    else:
+        print(f"[SEARCH_VEHICLE] Set to '{new_search_vehicle}' (WARNING: shared memory not initialized!)")

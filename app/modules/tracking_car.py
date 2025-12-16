@@ -12,6 +12,8 @@ import os
 import dotenv
 import ast
 import datetime
+import requests
+import paho.mqtt.client as mqtt
 dotenv.load_dotenv()
 # CONSTANTS
 PARKING_ID = os.getenv("PARKING_ID")
@@ -20,6 +22,34 @@ TRACKER_PATH = "app/resources/tracker/"+os.getenv("TRACKER_CONFIG")+".yaml"
 DETECT_MODEL_PATH = os.getenv("DETECT_MODEL_PATH")
 REID_COORDS_PATH = "app/resources/coordinates/reid-data/"
 SLOT_COORDS_PATH = "app/resources/coordinates/slot-data/"
+CLOUDINARY_UPLOAD_PRESET = os.getenv("UPLOAD_PRESET")
+CLOUDINARY_UPLOAD_URL = os.getenv("CLOUDINARY_UPLOAD_URL")
+MQTT_BROKER = "broker.hivemq.com"
+MQTT_PORT = 1883
+MQTT_TOPIC_SHOW_VEHICLE = "parking/vehicle/show"
+
+def publish_vehicle_image_url(image_url):
+    """
+    Publish image URL to MQTT topic parking/vehicle/show
+    """
+    try:
+        client = mqtt.Client()
+        client.connect(MQTT_BROKER, MQTT_PORT, 60)
+        client.loop_start()
+        time.sleep(0.5)  # Đợi kết nối hoàn tất
+        
+        result = client.publish(MQTT_TOPIC_SHOW_VEHICLE, image_url, qos=1)
+        result.wait_for_publish()
+        
+        client.loop_stop()
+        client.disconnect()
+        
+        print(f"[MQTT] ✅ Published image URL to {MQTT_TOPIC_SHOW_VEHICLE}")
+        print(f"[MQTT] URL: {image_url}")
+        return True
+    except Exception as e:
+        print(f"[MQTT] ❌ Failed to publish: {e}")
+        return False
 
 def update_mappings_atomic(coords_by_cam, lock, canonical_map, next_canonical, time_tol=0.5, stale=1.0):
     """
@@ -104,13 +134,14 @@ def update_mappings_atomic(coords_by_cam, lock, canonical_map, next_canonical, t
 def process_video(video_path, window_name, model_path, cam_id,
                   coords_by_cam, lock, canonical_map, next_canonical,
                   intersections_file, slot_file, start_barrier,
-                  bbox_shared, license_shared):
+                  bbox_shared, license_shared, search_vehicle_shared, searched_vehicle_uploaded):
     """
     Hàm xử lý video cho từng camera (chạy song song bằng process).
 
     Thay đổi quan trọng:
-    - Truyền explicit shared dict `bbox_shared` và `license_shared` (manager.dict) từ main process.
+    - Truyền explicit shared dict `bbox_shared`, `license_shared`, `search_vehicle_shared` (manager.dict) từ main process.
       Tránh việc child process cập nhật module `globals` cục bộ (không cùng memory với main khi dùng 'spawn').
+    - searched_vehicle_uploaded: shared dict để đảm bảo chỉ upload 1 lần.
     """
     print(f"[Camera {cam_id}] Loading YOLO model...")
     try:
@@ -138,6 +169,9 @@ def process_video(video_path, window_name, model_path, cam_id,
 
     # Load điểm giao trên hình (các vị trí bạn đánh dấu)
     intersections_coords = read_yaml(intersections_file)
+    
+    # Lưu search_vehicle trước đó để detect thay đổi
+    previous_search_vehicle = ""
 
     while True:
         coords_trackids = {}
@@ -145,6 +179,23 @@ def process_video(video_path, window_name, model_path, cam_id,
         ret, frame = cap.read()
         if not ret:
             break
+
+        # Kiểm tra nếu có yêu cầu tìm kiếm xe
+        search_vehicle = search_vehicle_shared.get('value', '')
+        
+        # Nếu search_vehicle thay đổi, reset flag uploaded
+        if search_vehicle != previous_search_vehicle:
+            if previous_search_vehicle != "" and previous_search_vehicle in searched_vehicle_uploaded:
+                # Xóa flag của search cũ
+                del searched_vehicle_uploaded[previous_search_vehicle]
+                print(f"[SEARCH] Reset search for: {previous_search_vehicle}")
+            previous_search_vehicle = search_vehicle
+            if search_vehicle != "":
+                print(f"[SEARCH] New search started for: {search_vehicle}")
+        
+        found_vehicle_in_this_camera = False
+        found_vehicle_bbox = None
+        found_vehicle_obj_id = None
 
         # YOLO + BoT-SORT tracking 
         results = model.track(
@@ -212,9 +263,18 @@ def process_video(video_path, window_name, model_path, cam_id,
                 # Lấy canonical_id
                 key = f"c{cam_id}_{obj_id}"
                 global_id = canonical_map.get(key)
+                
+                # Kiểm tra nếu xe này đang được tìm kiếm
+                if search_vehicle != "" and global_id is not None:
+                    vehicle_license = license_shared.get(global_id)
+                    if vehicle_license == search_vehicle:
+                        found_vehicle_in_this_camera = True
+                        found_vehicle_bbox = (x1, y1, x2, y2)
+                        found_vehicle_obj_id = obj_id
+                
                 label = f"ID:{obj_id}/{int(global_id)}" if global_id else f"ID {obj_id}/-"
-
-                # Vẽ bbox + label
+                
+                # Vẽ bbox bình thường (không highlight)
                 cv2.rectangle(frame, (x1, y1), (x2, y2), (0,255,0), 2)
                 cv2.putText(frame, label, (x1 + 3, y1 - 3),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
@@ -230,6 +290,63 @@ def process_video(video_path, window_name, model_path, cam_id,
             ]
         else:
             bbox_shared[cam_id] = []
+
+        # Nếu tìm thấy xe đang được search và chưa upload
+        if found_vehicle_in_this_camera and search_vehicle != "":
+            # Kiểm tra xem đã upload cho xe này chưa
+            already_uploaded = searched_vehicle_uploaded.get(search_vehicle, False)
+            
+            if not already_uploaded:
+                # Đánh dấu là đang xử lý (tạm lock)
+                searched_vehicle_uploaded[search_vehicle] = True
+                
+                print(f"[SEARCH] 🎯 Found vehicle {search_vehicle} in Camera {cam_id}!")
+                print(f"[SEARCH] Vehicle bbox: {found_vehicle_bbox}, obj_id: {found_vehicle_obj_id}")
+                
+                # Tạo frame copy để vẽ bounding box
+                frame_copy = frame.copy()
+                x1, y1, x2, y2 = found_vehicle_bbox
+                
+                # Vẽ bounding box màu đỏ trên frame copy
+                cv2.rectangle(frame_copy, (x1, y1), (x2, y2), (0, 0, 255), 5)
+                cv2.putText(frame_copy, f"FOUND: {search_vehicle}", (x1 + 3, y1 - 10),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                cv2.putText(frame_copy, f"Camera {cam_id}", (x1 + 3, y1 + 20),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+                
+                # Encode frame thành jpg
+                _, buffer = cv2.imencode('.jpg', frame_copy)
+                img_bytes = buffer.tobytes()
+                
+                # Upload image to Cloudinary
+                upload_success = False
+                try:
+                    response = requests.post(
+                        CLOUDINARY_UPLOAD_URL,
+                        files={"file": img_bytes},
+                        data={"upload_preset": CLOUDINARY_UPLOAD_PRESET}
+                    )
+                    if response.status_code == 200:
+                        image_url = response.json()["secure_url"]
+                        print(f"[SEARCH] ✅ Đã tải hình ảnh lên Cloudinary")
+                        print(f"[SEARCH] Image URL: {image_url}")
+                        upload_success = True                        
+                        # Publish image URL to MQTT
+                        threading.Thread(target=publish_vehicle_image_url, args=(image_url,)).start()                        
+                        # Publish image URL to MQTT
+                        threading.Thread(target=publish_vehicle_image_url, args=(image_url,)).start()
+                    else:
+                        print(f"[SEARCH] ❌ Lỗi upload Cloudinary: {response.status_code}")
+                except Exception as e:
+                    print(f"[SEARCH] ❌ Exception khi upload: {e}")
+                
+                # Reset search_vehicle_shared về "" sau khi xử lý xong
+                search_vehicle_shared['value'] = ""
+                print(f"[SEARCH] 🔄 Reset search_vehicle to empty")
+                
+                # Nếu upload thất bại, bỏ lock để có thể thử lại
+                if not upload_success:
+                    searched_vehicle_uploaded[search_vehicle] = False
 
         # Cập nhật dữ liệu detection của camera vào shared dict (để merge giữa các camera)
         for k, v in coords_trackids.items():
@@ -637,6 +754,19 @@ def start_tracking_car():
     # Use explicit shared objects and pass them to child processes (important for 'spawn' start method)
     shared_bbox_by_cam = manager.dict()
     shared_license_map = manager.dict()
+    
+    # Khởi tạo hoặc lấy search_vehicle_shared từ main
+    if globals.search_vehicle_shared is None:
+        shared_search_vehicle = manager.dict()
+        shared_search_vehicle['value'] = ""
+        globals.search_vehicle_shared = shared_search_vehicle
+        print("[INFO] Created new search_vehicle_shared in tracking_car")
+    else:
+        shared_search_vehicle = globals.search_vehicle_shared
+        print("[INFO] Using existing search_vehicle_shared from main")
+    
+    # Shared dict để đảm bảo chỉ upload 1 lần cho mỗi search_vehicle
+    searched_vehicle_uploaded = manager.dict()
 
     globals.bbox_by_cam = shared_bbox_by_cam
     globals.global_id_license_plate_map = shared_license_map
@@ -696,7 +826,7 @@ def start_tracking_car():
         p = Process(target=process_video, args=(
             video_path, window_name, DETECT_MODEL_PATH, idx,
             coords_by_cam, lock, canonical_map, next_canonical, intersections_file, slot_file, start_barrier,
-            shared_bbox_by_cam, shared_license_map
+            shared_bbox_by_cam, shared_license_map, shared_search_vehicle, searched_vehicle_uploaded
         ))
         p.start()
         procs.append(p)
