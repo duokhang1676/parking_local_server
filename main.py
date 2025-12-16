@@ -1,15 +1,9 @@
 import threading
-from multiprocessing import Manager
 from app.modules.utils import play_sound, save_regisstered_vehicles_to_file
 from app.modules import tracking_car, detect_license, connect_bgm220, connect_xg26, globals, turn_light_barier
 from app.modules.cloud_api import get_registered_vehicles
 
 def main():
-    # Khởi tạo shared memory cho give_way TRƯỚC KHI chạy bất kỳ thread nào
-    manager = Manager()
-    shared_give_way = manager.Value('b', False)
-    globals.give_way_shared = shared_give_way
-    
     threading.Thread(target=play_sound, args=("start-program.mp3",)).start()
     threading.Thread(target=save_regisstered_vehicles_to_file, args=(get_registered_vehicles(),)).start()
     threading.Thread(target=tracking_car.start_tracking_car, daemon=True).start()

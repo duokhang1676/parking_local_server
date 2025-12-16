@@ -351,6 +351,7 @@ def remove_vehicle_from_system(license_plate):
 
 from app.modules.tracking_car import is_vehicle_being_tracked
 from app.modules.cloud_api import insert_history
+from app.resources.print_bill.print_bill import printting, write_file_pdf
 import datetime
 def verify_car_out(license_plate):
     print(f"[VERIFY] Bắt đầu xác minh xe ra: {license_plate}")
@@ -408,4 +409,14 @@ def verify_car_out(license_plate):
                 'total_price': total_price
             })
             print(f"[VERIFY] Đã tạo history cho xe {license_plate}: {parking_time_hours}h, {total_price} VNĐ")
+            # Print bill
+            write_file_pdf(
+                date=time_out.strftime("%d/%m/%Y-%H:%M:%S"),
+                license=license_plate,
+                time_in=time_in,
+                time_out=time_out,
+                parking_time=parking_time_hours,
+                total_price=total_price
+            )
+            printting()
             return True

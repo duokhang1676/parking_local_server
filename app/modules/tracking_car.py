@@ -104,14 +104,13 @@ def update_mappings_atomic(coords_by_cam, lock, canonical_map, next_canonical, t
 def process_video(video_path, window_name, model_path, cam_id,
                   coords_by_cam, lock, canonical_map, next_canonical,
                   intersections_file, slot_file, start_barrier,
-                  bbox_shared, license_shared, give_way_shared):
+                  bbox_shared, license_shared):
     """
     Hàm xử lý video cho từng camera (chạy song song bằng process).
 
     Thay đổi quan trọng:
     - Truyền explicit shared dict `bbox_shared` và `license_shared` (manager.dict) từ main process.
       Tránh việc child process cập nhật module `globals` cục bộ (không cùng memory với main khi dùng 'spawn').
-    - Truyền `give_way_shared` (manager.Value) để kiểm tra và skip frame khi cần.
     """
     print(f"[Camera {cam_id}] Loading YOLO model...")
     try:
@@ -146,14 +145,6 @@ def process_video(video_path, window_name, model_path, cam_id,
         ret, frame = cap.read()
         if not ret:
             break
-
-        # Kiểm tra give_way - nếu True thì skip processing để tiết kiệm tài nguyên
-        if give_way_shared.value:
-            # Vẫn hiển thị frame gốc nhưng không xử lý
-            cv2.imshow(window_name, frame)
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                break
-            continue
 
         # YOLO + BoT-SORT tracking 
         results = model.track(
@@ -231,8 +222,10 @@ def process_video(video_path, window_name, model_path, cam_id,
             # CAMERA GỬI RẺ NHẤT – CHỈ GỬI ID và BOUNDING BOX
             # Update the SHARED bbox dict (manager dict) passed from main
             # Convert boxes to simple lists so manager proxy can serialize easily
+            # Thêm timestamp để kiểm tra detection có còn mới không
+            current_time = time.time()
             bbox_shared[cam_id] = [
-                (int(ids[i]), [int(x) for x in xyxy[i]])
+                (int(ids[i]), [int(x) for x in xyxy[i]], current_time)
                 for i in range(len(ids))
             ]
         else:
@@ -320,15 +313,33 @@ def is_vehicle_being_tracked(license_plate, canonical_map=None):
     
     # Tìm xe đang được track ở camera nào
     cameras_tracking = []
+    current_time = time.time()
+    DETECTION_TIMEOUT = 2.0  # Chỉ coi là đang track nếu detect trong vòng 2 giây gần nhất
+    
     print(f"[DEBUG] Checking {len(VIDEO_SOURCES)} cameras...")
     for cam_idx in range(len(VIDEO_SOURCES)):
         bboxes = globals.bbox_by_cam.get(cam_idx, [])
-        print(f"[DEBUG] Camera {cam_idx}: {len(bboxes)} bboxes = {bboxes}")
-        for obj_id, box in bboxes:
+        print(f"[DEBUG] Camera {cam_idx}: {len(bboxes)} bboxes")
+        for bbox_data in bboxes:
+            # Xử lý cả format cũ (obj_id, box) và format mới (obj_id, box, timestamp)
+            if len(bbox_data) == 2:
+                obj_id, box = bbox_data
+                timestamp = current_time  # Fallback: coi như mới nếu không có timestamp
+            elif len(bbox_data) == 3:
+                obj_id, box, timestamp = bbox_data
+            else:
+                continue
+            
+            # KIỂM TRA QUAN TRỌNG: Detection có còn mới không?
+            time_diff = current_time - timestamp
+            if time_diff > DETECTION_TIMEOUT:
+                print(f"[DEBUG]   SKIP obj_id={obj_id}: detection quá cũ ({time_diff:.2f}s)")
+                continue
+            
             # Kiểm tra key trong canonical_map
             key = f"c{cam_idx}_{obj_id}"
             gid = canonical_map.get(key)
-            print(f"[DEBUG]   Checking obj_id={obj_id}, key={key}, gid={gid}, target_global_id={global_id}")
+            print(f"[DEBUG]   Checking obj_id={obj_id}, key={key}, gid={gid}, target_global_id={global_id}, age={time_diff:.2f}s")
             if gid == global_id:
                 # Double-check: global_id này có đúng license_plate đang tìm không?
                 verified_license = globals.global_id_license_plate_map.get(gid)
@@ -336,11 +347,12 @@ def is_vehicle_being_tracked(license_plate, canonical_map=None):
                 if verified_license != license_plate:
                     print(f"[DEBUG]   SKIP: global_id {gid} không còn thuộc về {license_plate}")
                     continue
-                print(f"[DEBUG] ✓ MATCH FOUND! Camera {cam_idx}, obj_id {obj_id}, bbox {box}")
+                print(f"[DEBUG] ✓ MATCH FOUND! Camera {cam_idx}, obj_id {obj_id}, bbox {box}, age={time_diff:.2f}s")
                 cameras_tracking.append({
                     'camera_id': cam_idx,
                     'local_track_id': obj_id,
-                    'bbox': box
+                    'bbox': box,
+                    'detection_age': time_diff
                 })
                 break
     
@@ -402,9 +414,6 @@ def check_parking_vehicle_valid():
     # Bộ đếm số lần slot_name bị rỗng liên tiếp
     empty_slot_count = {}
     while True:
-        if globals.get_give_way():
-            time. sleep(10)
-            continue  # Bỏ qua kiểm tra khi đang give way
         parked_vehicles = get_parked_vehicles_from_file()
         if parked_vehicles['list'] is None:
             time. sleep(10)
@@ -490,8 +499,6 @@ def check_occupied_slots(canonical_map):
 
     while True:
         time. sleep(1)
-        if globals.get_give_way():
-            continue  # Bỏ qua kiểm tra khi đang give way
         now = time.time()
         if now - last_check_time < CHECK_INTERVAL:
             continue
@@ -523,7 +530,15 @@ def check_occupied_slots(canonical_map):
                 sx, sy = s["coordinate"]
                 
                 # Chỉ kiểm tra với bbox từ camera này
-                for obj_id, box in bboxes:
+                for bbox_data in bboxes:
+                    # Xử lý cả format cũ (obj_id, box) và format mới (obj_id, box, timestamp)
+                    if len(bbox_data) == 2:
+                        obj_id, box = bbox_data
+                    elif len(bbox_data) == 3:
+                        obj_id, box, timestamp = bbox_data
+                    else:
+                        continue
+                    
                     x1, y1, x2, y2 = map(int, box)
                     
                     if x1 <= sx <= x2 and y1 <= sy <= y2:
@@ -614,21 +629,9 @@ def start_tracking_car():
     # Use explicit shared objects and pass them to child processes (important for 'spawn' start method)
     shared_bbox_by_cam = manager.dict()
     shared_license_map = manager.dict()
-    
-    # Kiểm tra xem give_way_shared đã được khởi tạo từ main chưa
-    if globals.give_way_shared is None:
-        # Nếu chưa có, tạo mới (backward compatibility)
-        shared_give_way = manager.Value('b', False)
-        globals.give_way_shared = shared_give_way
-        print("[INFO] Created new give_way_shared in tracking_car")
-    else:
-        # Dùng shared variable đã có từ main
-        shared_give_way = globals.give_way_shared
-        print("[INFO] Using existing give_way_shared from main")
 
     globals.bbox_by_cam = shared_bbox_by_cam
     globals.global_id_license_plate_map = shared_license_map
-    globals.give_way = shared_give_way.value  # Giữ reference local cho compatibility
 
     camera_configs = []
     print("[INFO] Loading camera coordinates from cloud server...")
@@ -685,7 +688,7 @@ def start_tracking_car():
         p = Process(target=process_video, args=(
             video_path, window_name, DETECT_MODEL_PATH, idx,
             coords_by_cam, lock, canonical_map, next_canonical, intersections_file, slot_file, start_barrier,
-            shared_bbox_by_cam, shared_license_map, shared_give_way
+            shared_bbox_by_cam, shared_license_map
         ))
         p.start()
         procs.append(p)

@@ -118,12 +118,10 @@ def start_connect_bgm220():
                             if value == "1":
                                 threading.Thread(target=play_sound, args=('quet-ma.mp3',)).start()
                                 print("[ACTION] Xe vào - Bật detect license")
-                                globals.set_give_way(True)
                                 globals.start_detect_license = True
                                 globals.car_in = True
                             else:
                                 print("[ACTION] Xe vào kết thúc - Tắt detect license")
-                                globals.set_give_way(False)
                                 globals.start_detect_license = False
                                 globals.license_plate = ""
                                 globals.qr_code = ""
@@ -133,12 +131,10 @@ def start_connect_bgm220():
                             if value == "1":
                                 threading.Thread(target=play_sound, args=('quet-ma.mp3',)).start()
                                 print("[ACTION] Xe ra - Bật detect license")
-                                globals.set_give_way(True)
                                 globals.start_detect_license = True
                                 globals.car_out = True
                             else:
                                 print("[ACTION] Xe ra kết thúc - Tắt detect license")
-                                globals.set_give_way(False)
                                 globals.start_detect_license = False
                                 globals.license_plate = ""
                                 globals.qr_code = ""
