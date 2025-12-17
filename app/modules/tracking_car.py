@@ -188,10 +188,10 @@ def process_video(video_path, window_name, model_path, cam_id,
         search_vehicle = search_vehicle.upper() if search_vehicle else ""
         
         if search_vehicle != previous_search_vehicle:
-            if previous_search_vehicle != "" and previous_search_vehicle in searched_vehicle_uploaded:
-                # Xóa flag của search cũ
-                del searched_vehicle_uploaded[previous_search_vehicle]
-                print(f"[SEARCH] Reset search for: {previous_search_vehicle}")
+            if previous_search_vehicle != "":
+                # Xóa flag của search cũ (dùng pop để tránh KeyError nếu đã bị xóa bởi process khác)
+                if searched_vehicle_uploaded.pop(previous_search_vehicle, None) is not None:
+                    print(f"[SEARCH] Reset search for: {previous_search_vehicle}")
             previous_search_vehicle = search_vehicle
             if search_vehicle != "":
                 print(f"[SEARCH] 🔍 New search started for: {search_vehicle}")
@@ -298,29 +298,35 @@ def process_video(video_path, window_name, model_path, cam_id,
 
         # Nếu tìm thấy xe đang được search và chưa upload
         if found_vehicle_in_this_camera and search_vehicle != "":
-            # Kiểm tra xem đã upload cho xe này chưa
-            already_uploaded = searched_vehicle_uploaded.get(search_vehicle, False)
+            # Atomic test-and-set: chỉ camera đầu tiên được phép upload
+            # setdefault returns EXISTING value if key exists, else sets and returns new value
+            already_uploaded = searched_vehicle_uploaded.setdefault(search_vehicle, False)
             
             if not already_uploaded:
-                # Đánh dấu là đang xử lý (tạm lock)
+                # Đánh dấu là đã xử lý (lock cho các camera khác)
                 searched_vehicle_uploaded[search_vehicle] = True
                 
-                print(f"[SEARCH] 🎯 Found vehicle {search_vehicle} in Camera {cam_id}!")
+                print(f"[SEARCH] 🎯 Camera {cam_id} won the race! Uploading vehicle {search_vehicle}...")
                 print(f"[SEARCH] Vehicle bbox: {found_vehicle_bbox}, obj_id: {found_vehicle_obj_id}")
                 
-                # Tạo frame copy để vẽ bounding box
-                frame_copy = frame.copy()
+                # Copy frame GỐC (trước khi vẽ bất kỳ thứ gì) - CHỈ copy khi cần thiết để tiết kiệm tài nguyên
+                # Cần capture frame hiện tại, nhưng vì đã vẽ tracking boxes lên frame rồi,
+                # ta cần đọc lại frame từ buffer hoặc dùng frame trước khi vẽ
+                # Giải pháp: Lấy frame từ results (chưa vẽ)
+                frame_for_mqtt = results[0].orig_img.copy()
                 x1, y1, x2, y2 = found_vehicle_bbox
                 
-                # Vẽ bounding box màu đỏ trên frame copy
-                cv2.rectangle(frame_copy, (x1, y1), (x2, y2), (0, 0, 255), 5)
-                cv2.putText(frame_copy, f"FOUND: {search_vehicle}", (x1 + 3, y1 - 10),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-                cv2.putText(frame_copy, f"Camera {cam_id}", (x1 + 3, y1 + 20),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+                # Vẽ bounding box và biển số màu xanh lá, thickness = 1
+                cv2.rectangle(frame_for_mqtt, (x1, y1), (x2, y2), (0, 255, 0), 1)
+                cv2.putText(frame_for_mqtt, search_vehicle, (x1 + 3, y1 - 3),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 1)
+                
+                # Vẽ tên camera ở góc trên bên trái của frame
+                cv2.putText(frame_for_mqtt, f"Camera {cam_id}", (10, 30),
+                            cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
                 
                 # Encode frame thành jpg
-                _, buffer = cv2.imencode('.jpg', frame_copy)
+                _, buffer = cv2.imencode('.jpg', frame_for_mqtt)
                 img_bytes = buffer.tobytes()
                 
                 # Upload image to Cloudinary
@@ -335,10 +341,9 @@ def process_video(video_path, window_name, model_path, cam_id,
                         image_url = response.json()["secure_url"]
                         print(f"[SEARCH] ✅ Đã tải hình ảnh lên Cloudinary")
                         print(f"[SEARCH] Image URL: {image_url}")
-                        upload_success = True                        
-                        # Publish image URL to MQTT
-                        threading.Thread(target=publish_vehicle_image_url, args=(image_url,)).start()                        
-                        # Publish image URL to MQTT
+                        upload_success = True
+                        
+                        # Publish image URL to MQTT (chỉ 1 lần)
                         threading.Thread(target=publish_vehicle_image_url, args=(image_url,)).start()
                     else:
                         print(f"[SEARCH] ❌ Lỗi upload Cloudinary: {response.status_code}")
@@ -370,8 +375,7 @@ def process_video(video_path, window_name, model_path, cam_id,
             cv2.circle(frame, (item['coordinate']), 5, (0, 255, 0), -1)
 
         cv2.imshow(window_name, frame)
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
+        cv2.waitKey(1)
 
     cap.release()
 
